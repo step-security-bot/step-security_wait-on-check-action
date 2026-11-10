@@ -1,0 +1,24 @@
+{
+  "language": "en",
+  "dictionaries": [
+    "aws",
+    "bash",
+    "en-gb",
+    "fullstack",
+    "misc",
+    "softwareTerms"
+  ],
+  "ignorePaths": [".git"],
+  "words": [
+    "antiope",
+    "bumpversion",
+    "doctl",
+    "ghes",
+    "kubeconfig",
+    "lewagon",
+    "nodoc",
+    "rexml",
+    "rubocop",
+    "yardoc"
+  ]
+}

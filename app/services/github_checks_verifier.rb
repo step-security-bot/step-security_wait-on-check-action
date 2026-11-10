@@ -1,0 +1,151 @@
+# frozen_string_literal: true
+
+require_relative 'application_service'
+require_relative '../errors/check_conclusion_not_allowed_error'
+require_relative '../errors/check_never_run_error'
+require_relative '../errors/required_input_error'
+require 'active_support/configurable'
+
+require 'json'
+require 'octokit'
+
+# Verifies the status of GitHub checks for a given repository.
+class GithubChecksVerifier < ApplicationService
+  include ActiveSupport::Configurable
+
+  config_accessor :client, :ref, :repo
+  config_accessor(:allowed_conclusions) { %w[success skipped] }
+  config_accessor(:check_name) { '' }
+  config_accessor(:check_regexp) { '' }
+  config_accessor(:fail_on_no_checks) { true }
+  config_accessor(:ignore_checks) { [] }
+  config_accessor(:verbose) { true }
+  config_accessor(:discovery_timeout) { 60 }
+  config_accessor(:wait) { 30 }
+  config_accessor(:workflow_name) { '' }
+  config_accessor(:wait_for_duplicates) { false }
+
+  def call
+    validate_inputs
+    wait_for_checks
+  rescue CheckNeverRunError, CheckConclusionNotAllowedError, RequiredInputError => e
+    puts e.message
+    exit 1
+  end
+
+  private
+
+  def validate_inputs
+    raise RequiredInputError, 'ref' if ref.blank?
+    raise RequiredInputError, 'repo-token' if client.access_token.blank?
+  end
+
+  def query_check_status
+    options = { accept: 'application/vnd.github.antiope-preview+json' }
+    options[:filter] = 'all' if wait_for_duplicates
+    checks = client.check_runs_for_ref(repo, ref, options).check_runs
+    log_checks(checks, 'Checks running on ref:')
+
+    checks = keep_latest_per_name(checks) unless wait_for_duplicates
+    apply_filters(checks)
+  end
+
+  # The API's `filter=latest` only deduplicates within a single check suite, so a
+  # ref can still carry several runs sharing a name when separate events (e.g. an
+  # edited PR) spawn new suites. Unless we are explicitly waiting for duplicates,
+  # keep only the most recently started run for each name so a stale earlier
+  # attempt can't override a newer one.
+  def keep_latest_per_name(checks)
+    checks.group_by(&:name).map { |_name, runs| runs.max_by { |run| run.started_at.to_s } }
+  end
+
+  def log_checks(checks, msg)
+    return unless verbose
+
+    puts msg
+    statuses = checks.map(&:status).uniq
+    statuses.each do |status|
+      print "Checks #{status}: "
+      puts checks.select { |check| check.status == status }.map(&:name).join(', ')
+    end
+  end
+
+  def apply_filters(checks)
+    checks.reject! { |check| [ignore_checks, workflow_name].flatten.include?(check.name) }
+    log_checks(checks, 'Checks after ignore checks filter:')
+    checks.select! { |check| check.name == check_name } if check_name.present?
+    log_checks(checks, 'Checks after check_name filter:')
+    apply_regexp_filter(checks)
+    log_checks(checks, 'Checks after Regexp filter:')
+
+    checks
+  end
+
+  def apply_regexp_filter(checks)
+    checks.select! { |check| check.name[Regexp.new(check_regexp)] } if check_regexp.present?
+  end
+
+  def wait_for_check_discovery(all_checks)
+    return all_checks unless filters_present? && all_checks.blank? && fail_on_no_checks
+
+    wait_until = Time.now + discovery_timeout
+    while all_checks.blank? && Time.now < wait_until
+      puts "Matching checks have not been found yet, will check again in #{wait} seconds. " \
+           "(Limit: #{discovery_timeout}s)"
+      all_checks = (sleep(wait) && query_check_status)
+    end
+    all_checks
+  end
+
+  def all_checks_complete(checks)
+    checks.all? { |check| check.status == 'completed' }
+  end
+
+  def filters_present?
+    check_name.present? || check_regexp.present?
+  end
+
+  def check_conclusion_allowed(check)
+    allowed_conclusions.include? check.conclusion
+  end
+
+  def fail_if_requested_check_never_run(all_checks)
+    return unless filters_present? && all_checks.blank?
+
+    unless fail_on_no_checks
+      puts 'No checks found matching the filter, but fail-on-no-checks is false. Succeeding...'
+      return
+    end
+
+    raise CheckNeverRunError
+  end
+
+  def fail_unless_all_conclusions_allowed(checks)
+    return if checks.all? { |check| check_conclusion_allowed(check) }
+
+    raise CheckConclusionNotAllowedError, allowed_conclusions
+  end
+
+  def show_checks_conclusion_message(checks)
+    puts 'Checks completed:'
+    puts checks.reduce('') { |message, check|
+      "#{message}#{check.name}: #{check.status} (#{check.conclusion})\n"
+    }
+  end
+
+  def wait_for_checks
+    all_checks = wait_for_check_discovery(query_check_status)
+    fail_if_requested_check_never_run(all_checks)
+
+    until all_checks_complete(all_checks)
+      plural_part = all_checks.length > 1 ? "checks aren't" : "check isn't"
+      puts "The requested #{plural_part} complete yet, will check back in #{wait} seconds..."
+      sleep(wait)
+      all_checks = query_check_status
+    end
+
+    show_checks_conclusion_message(all_checks)
+
+    fail_unless_all_conclusions_allowed(all_checks)
+  end
+end

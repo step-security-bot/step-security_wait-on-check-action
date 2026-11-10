@@ -1,0 +1,22 @@
+name: Wait using check-regexp
+on:
+  workflow_dispatch:
+  push:
+  
+jobs:
+  wait-for-check-regexp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      
+      - name: Wait on tests
+        uses: ./
+        with:
+          ref: ${{ github.sha }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10 # seconds
+          running-workflow-name: wait-for-check-regexp
+          check-regexp: .?-task
+
+      - name: Success
+        run: echo 'success!'

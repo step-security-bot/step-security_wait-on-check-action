@@ -1,0 +1,23 @@
+name: Wait omitting check-name
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  wait-omitting-check-name:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Wait on tests
+        uses: ./
+        with:
+          ref: ${{ github.sha }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10 # seconds
+          running-workflow-name: wait-omitting-check-name
+          # Harden-Runner completes only after all checks finish, so waiting on it would deadlock
+          ignore-checks: StepSecurity Harden-Runner
+
+      - name: Success
+        run: echo 'success!'
