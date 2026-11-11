@@ -1,1 +1,359 @@
-# wait-on-check-action
+[![StepSecurity Maintained Action](https://raw.githubusercontent.com/step-security/maintained-actions-assets/main/assets/maintained-action-banner.png)](https://docs.stepsecurity.io/actions/stepsecurity-maintained-actions)
+
+# Wait On Check Action
+
+Pause until a job in another workflow completes successfully.
+
+This action uses GitHub's [Checks API](https://docs.github.com/rest/checks) to poll for check results. On success, the action exits allowing the workflow to resume. Otherwise, the action exits with status code 1 and fails the workflow.
+
+> [!TIP]
+> Prefer to skip the Ruby setup overhead? [`wait-on-check-action-ts`](https://github.com/matiasalbarello/wait-on-check-action-ts) is a TypeScript port that runs as a native `node24` action with no setup step, while keeping the same parameters, defaults, and behavior.
+
+## When to use this action
+
+- You need to wait for checks on **non-default branches** (PRs, feature branches)
+- You need **multiple workflows to wait atomically** until all checks pass
+- You need **flexible check filtering** (regex patterns, specific names, exclusions)
+- You're coordinating workflows triggered by `repository_dispatch` or external events
+
+### Consider native GitHub Actions features when
+
+- All your jobs are in the **same workflow** → use [`needs`](#using-needs)
+- You only work on the **default branch** and simple triggers suffice → use [`workflow_run`](#using-workflow_run)
+
+## Quickstart
+
+**Workflow A** - Runs tests
+
+```yaml
+name: Test
+
+on: [push]
+
+jobs:
+  test:
+    name: Run tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: npm test
+```
+
+**Workflow B** - Waits for tests before publishing
+
+```yaml
+name: Publish
+
+on: [push]
+
+jobs:
+  publish:
+    name: Publish the package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for tests to succeed
+        uses: step-security/wait-on-check-action@v1
+        with:
+          ref: ${{ github.ref }}
+          check-name: "Run tests"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
+
+      - uses: actions/checkout@v7
+      - run: npm publish
+```
+
+## Inputs
+
+### Required inputs
+
+| Input        | Description                              | Example                       |
+| ------------ | ---------------------------------------- | ----------------------------- |
+| `ref`        | Git ref to check (branch/tag/commit SHA) | `${{ github.ref }}`           |
+| `repo-token` | GitHub token for API access              | `${{ secrets.GITHUB_TOKEN }}` |
+
+### Optional inputs
+
+| Input                      | Description                                                               | Example                               | Default           |
+| -------------------------- | ------------------------------------------------------------------------- | ------------------------------------- | ----------------- |
+| `allowed-conclusions`      | Comma-separated list of acceptable conclusions                            | `success,skipped`                     | `success,skipped` |
+| `api-endpoint`             | Custom GitHub API endpoint (for GHE)                                      | `https://github.mycompany.com/api/v3` | -                 |
+| `bundler-cache`            | Enable Bundler cache in `ruby/setup-ruby`                                 | `true`                                | `true`            |
+| `check-name`               | Specific check name to wait for                                           | `"Run tests"`                         | -                 |
+| `check-regexp`             | Filter checks using regex pattern                                         | `"test-.*"`                           | -                 |
+| `checks-discovery-timeout` | Seconds to wait for checks to be discovered                               | `60`                                  | `60`              |
+| `fail-on-no-checks`        | Fail the action if no checks match the check-name or check-regexp filters | `true`                                | `true`            |
+| `ignore-checks`            | Comma-separated list of checks to ignore                                  | `optional-lint,coverage-report`       | -                 |
+| `running-workflow-name`    | Name of current workflow (to exclude from waiting)                        | `"Deploy"`                            | -                 |
+| `verbose`                  | Print detailed logs                                                       | `true`                                | `true`            |
+| `wait-interval`            | Seconds between API requests                                              | `10`                                  | `10`              |
+| `wait-for-duplicates`      | Require every check with a duplicate name to succeed                      | `false`                               | `false`           |
+
+## Usage examples
+
+### Wait for a specific check
+
+```yaml
+- name: Wait for tests
+  uses: step-security/wait-on-check-action@v1
+  with:
+    ref: ${{ github.ref }}
+    check-name: "Run tests"
+    repo-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+### Wait for all checks (except current workflow)
+
+```yaml
+jobs:
+  publish:
+    name: Publish the package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for other checks to succeed
+        uses: step-security/wait-on-check-action@v1
+        with:
+          ref: ${{ github.ref }}
+          running-workflow-name: "Publish the package"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+### Wait for checks matching a pattern
+
+```yaml
+- name: Wait for all test jobs
+  uses: step-security/wait-on-check-action@v1
+  with:
+    ref: ${{ github.sha }}
+    check-regexp: "test-.*"
+    repo-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+### Accept cancelled checks
+
+```yaml
+- name: Wait for checks (allow cancelled)
+  uses: step-security/wait-on-check-action@v1
+  with:
+    ref: ${{ github.ref }}
+    check-name: "Run tests"
+    repo-token: ${{ secrets.GITHUB_TOKEN }}
+    allowed-conclusions: success,skipped,cancelled
+```
+
+### Ignore specific checks
+
+```yaml
+- name: Wait for checks (ignore some)
+  uses: step-security/wait-on-check-action@v1
+  with:
+    ref: ${{ github.sha }}
+    running-workflow-name: "Deploy"
+    ignore-checks: "optional-lint,coverage-report"
+    repo-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+### Allow no matching checks
+
+By default, if you use `check-name` or `check-regexp` and no checks match the filter, the action will fail with the message "The requested check was never run against this ref, exiting...".
+
+If you want the action to succeed when no checks match the filter (useful for conditional workflows where certain checks only run on specific file changes), you can set `fail-on-no-checks` to `false`:
+
+```yaml
+name: Wait for optional checks
+on:
+  push:
+jobs:
+  wait-for-optional-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Wait on optional tests
+        uses: step-security/wait-on-check-action@v1
+        with:
+          ref: ${{ github.sha }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          running-workflow-name: wait-for-optional-checks
+          check-regexp: optional-.*
+          fail-on-no-checks: false
+```
+
+### Wait for a check that doesn't exist yet
+
+When a job uses `needs` it isn't created until the dependent jobs are completed.
+
+If you want to extend the discovery time window to wait for jobs to be created, you can set `checks-discovery-timeout`:
+
+```yaml
+jobs:
+  setup:
+    # Some slow setup job
+  test:
+    needs: setup
+    name: Run Tests
+```
+
+```yaml
+- name: Wait for tests
+  uses: step-security/wait-on-check-action@v1
+  with:
+    ref: ${{ github.ref }}
+    check-name: "Run tests"
+    repo-token: ${{ secrets.GITHUB_TOKEN }}
+    checks-discovery-timeout: 300
+```
+
+### Wait for services that publish duplicate check names
+
+Some services publish multiple `check_run`s under the **same name** on a single
+commit — one per environment, retry, or internal worker. By default only the
+most recent run for a given name is considered, so when these runs finish at
+different times the first one to complete determines the reported status. A
+single early failure can then fail the wait even though a later run of the same
+name succeeds, making the result non-deterministic from one CI run to the next.
+
+Set `wait-for-duplicates: true` to require **every** check sharing a name to
+succeed before the action continues:
+
+```yaml
+- name: Wait for deploy preview
+  uses: step-security/wait-on-check-action@v1
+  with:
+    ref: ${{ github.ref }}
+    check-name: "Deploy Preview"
+    repo-token: ${{ secrets.GITHUB_TOKEN }}
+    wait-for-duplicates: true
+```
+
+## Understanding check names
+
+The check name corresponds to `jobs.<job_id>.name` in your workflow:
+
+```yaml
+# Check name: "test" (uses job ID)
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps: [...]
+
+# Check name: "Run tests" (uses explicit name)
+jobs:
+  test:
+    name: Run tests
+    runs-on: ubuntu-latest
+    steps: [...]
+
+# Check names: "Run tests (3.9)", "Run tests (3.10)", etc.
+jobs:
+  test:
+    name: Run tests
+    strategy:
+      matrix:
+        python: ['3.9', '3.10', '3.11']
+```
+
+To inspect check names via the API:
+
+```bash
+curl -H "Authorization: token $GITHUB_TOKEN" \
+  https://api.github.com/repos/OWNER/REPO/commits/REF/check-runs \
+  | jq '[.check_runs[].name]'
+```
+
+### Reusable workflows
+
+When using this action in a reusable workflow, the check name includes both the caller and callee job names:
+
+`.github/workflows/caller.yml`
+
+```yaml
+on: push
+jobs:
+  caller:
+    uses: ./.github/workflows/callee.yml
+```
+
+`.github/workflows/callee.yml`
+
+```yaml
+on: workflow_call
+jobs:
+  callee:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for other workflows
+        uses: step-security/wait-on-check-action@v1
+        with:
+          ref: ${{ github.ref }}
+          running-workflow-name: "caller / callee"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+## GitHub Enterprise support
+
+Pass your GHE API endpoint:
+
+```yaml
+- name: Wait for tests (GHE)
+  uses: step-security/wait-on-check-action@v1
+  with:
+    ref: ${{ github.ref }}
+    check-name: "Run tests"
+    repo-token: ${{ secrets.GITHUB_TOKEN }}
+    api-endpoint: https://github.mycompany.com/api/v3
+```
+
+## Known limitations
+
+- **Pagination**: The action handles up to 100 concurrent workflow runs. If you have more, some may not be detected.
+- **API Rate Limits**: Frequent polling may hit GitHub API rate limits. Increase `wait-interval` if needed.
+
+## Alternatives
+
+### Using `needs`
+
+For jobs **in the same workflow**, use the native `needs` keyword:
+
+```yaml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test
+
+  deploy:
+    needs: test # Waits for test to complete successfully
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm run deploy
+```
+
+### Using `workflow_run`
+
+For triggering workflows **on the default branch** after another workflow completes:
+
+```yaml
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["Test"]
+    types: [completed]
+
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm run deploy
+```
+
+**Limitations of `workflow_run`:**
+
+- Only triggers on the **default branch**
+- Triggers once per workflow completion (not atomic "wait for all")
+- Requires manual success checking with `if` condition
+
+### License
+
+See the [LICENSE](LICENSE.md) file.
