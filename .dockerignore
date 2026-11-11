@@ -1,0 +1,8 @@
+vendor/
+.git
+.github
+doc/
+spec/
+.idea
+.yardoc
+.bundle
