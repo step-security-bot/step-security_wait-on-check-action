@@ -4,10 +4,19 @@ on:
   push:
 
 # wait-using-check-regexp waits for this task
+permissions: {}
+
 jobs:
   simple-task:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
       - name: Sleep
         run: sleep 10
       - name: Done
