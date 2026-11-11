@@ -11,14 +11,18 @@
   "ignorePaths": [".git"],
   "words": [
     "antiope",
+    "autobuild",
+    "buildscript",
     "bumpversion",
     "doctl",
     "ghes",
     "kubeconfig",
     "lewagon",
     "nodoc",
+    "ossf",
     "rexml",
     "rubocop",
+    "sarif",
     "yardoc"
   ]
 }
