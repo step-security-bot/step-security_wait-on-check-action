@@ -8,10 +8,19 @@ on:
         default: "60"
   push:
 
+permissions: {}
+
 jobs:
   wait-on-me:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
       - name: Dump GitHub context
         env:
           GITHUB_CONTEXT: ${{ toJSON(github) }}
